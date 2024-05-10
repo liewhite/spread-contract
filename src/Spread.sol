@@ -5,8 +5,15 @@ import "./Ownable.sol";
 import "./interfaces/IERC20.sol";
 import "./libraries/UniswapV2Library.sol";
 import "./interfaces/IUniswapV2Pair.sol";
+import "./interfaces/IUniswapV2Callee.sol";
 
-contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
+contract Spread is
+    Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081),
+    IUniswapV2Callee
+{
+    // 临时变量， 验证回调是否合法
+    address private tmpPoolAddr;
+
     function withdrawToken(address _token, uint256 amount) public onlyOwner {
         IERC20(_token).transfer(owner(), amount);
     }
@@ -34,14 +41,31 @@ contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
         uint256 amountIn,
         bool isToken0Out // 是否借出的token0
     ) internal {
+        // 回调需要知道归还哪个token, 借0还1， 借1还0
+        address repayToken;
+        if (isToken0Out) {
+            repayToken = IUniswapV2Pair(pool).token1();
+        } else {
+            repayToken = IUniswapV2Pair(pool).token0();
+        }
+        // 回调也需要归还多少
         uint256 callbackAmountIn = amountIn;
-        // 根据
-        if(callbackAmountIn == 0) {
-            (uint256 reserve0, uint256 reserve1, uint32 ts) = IUniswapV2Pair(pool).getReserves();
-            if(isToken0Out) {
-                callbackAmountIn = UniswapV2Library.getAmountIn(amountOut, reserve1, reserve0);
-            }else {
-                callbackAmountIn = UniswapV2Library.getAmountIn(amountOut, reserve0, reserve1);
+        // 合约内计算amountIn
+        if (callbackAmountIn == 0) {
+            (uint256 reserve0, uint256 reserve1, ) = IUniswapV2Pair(pool)
+                .getReserves();
+            if (isToken0Out) {
+                callbackAmountIn = UniswapV2Library.getAmountIn(
+                    amountOut,
+                    reserve1,
+                    reserve0
+                );
+            } else {
+                callbackAmountIn = UniswapV2Library.getAmountIn(
+                    amountOut,
+                    reserve0,
+                    reserve1
+                );
             }
         }
 
@@ -49,11 +73,21 @@ contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
         uint256 amount1 = 0;
         if (isToken0Out) {
             amount0 = amountOut;
-        }else {
+        } else {
             amount1 = amountOut;
         }
-        // todo 合约内计算amountIn
-        IUniswapV2Pair(pool).swap(amount0, amount1, to, abi.encode(callbackAmountIn));
+        tmpPoolAddr = pool;
+        IUniswapV2Pair(pool).swap(
+            amount0,
+            amount1,
+            to,
+            abi.encode(repayToken, callbackAmountIn)
+        );
+    }
+
+    function uniswapV2Call(address, uint, uint, bytes calldata data) external {
+        (address token, uint256 amount) = abi.decode(data, (address, uint256));
+        IERC20(token).transfer(msg.sender, amount);
     }
 
     // univ3闪电贷逻辑, 直接把钱借到下一个池子去
@@ -69,11 +103,8 @@ contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
     // univ2 swap 逻辑
     // 这里假设amountIn已经进入池子了
     // NOTE: amountOut是必须知道的, 如果是0 ， 那就通过getAmountOut计算
-    function swap_univ2() internal {
-    }
+    function swap_univ2() internal {}
 
     // univ2 swap 逻辑, swap一定是知道amountIn的， 那么amountOut就会通过函数返回值拿到
-    function swap_univ3() internal {
-
-    }
+    function swap_univ3() internal {}
 }
