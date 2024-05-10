@@ -34,14 +34,16 @@ contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
         uint256 amountIn,
         bool isToken0Out // 是否借出的token0
     ) internal {
-        // if(amountIn == 0) {
-        //     (uint256 reserve0, uint256 reserve1) = IUniswapV2Pair(pool).getReserves();
-        //     if(isToken0Out) {
-
-        //     }
-        //     UniswapV2Library.getReserves(factory, tokenA, tokenB);
-            
-        // }
+        uint256 callbackAmountIn = amountIn;
+        // 根据
+        if(callbackAmountIn == 0) {
+            (uint256 reserve0, uint256 reserve1, uint32 ts) = IUniswapV2Pair(pool).getReserves();
+            if(isToken0Out) {
+                callbackAmountIn = UniswapV2Library.getAmountIn(amountOut, reserve1, reserve0);
+            }else {
+                callbackAmountIn = UniswapV2Library.getAmountIn(amountOut, reserve0, reserve1);
+            }
+        }
 
         uint256 amount0 = 0;
         uint256 amount1 = 0;
@@ -51,8 +53,7 @@ contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
             amount1 = amountOut;
         }
         // todo 合约内计算amountIn
-        IUniswapV2Pair(pool).swap(amount0, amount1, to, "");
-
+        IUniswapV2Pair(pool).swap(amount0, amount1, to, abi.encode(callbackAmountIn));
     }
 
     // univ3闪电贷逻辑, 直接把钱借到下一个池子去
