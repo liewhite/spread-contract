@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import "../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
-import "../lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "./interface/IUniswapV2Pair.sol";
+import "./Ownable.sol";
+import "./interfaces/IERC20.sol";
+import "./libraries/UniswapV2Library.sol";
+import "./interfaces/IUniswapV2Pair.sol";
 
 contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
     function withdrawToken(address _token, uint256 amount) public onlyOwner {
@@ -31,21 +32,26 @@ contract Spread is Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081) {
         address to,
         uint256 amountOut,
         uint256 amountIn,
-        bool is_token0
+        bool isToken0Out // 是否借出的token0
     ) internal {
-        if(amountIn == 0) {
+        // if(amountIn == 0) {
+        //     (uint256 reserve0, uint256 reserve1) = IUniswapV2Pair(pool).getReserves();
+        //     if(isToken0Out) {
+
+        //     }
+        //     UniswapV2Library.getReserves(factory, tokenA, tokenB);
             
-        }
+        // }
 
         uint256 amount0 = 0;
         uint256 amount1 = 0;
-        if (is_token0) {
+        if (isToken0Out) {
             amount0 = amountOut;
         }else {
             amount1 = amountOut;
         }
         // todo 合约内计算amountIn
-        IUniswapV2Pair(pool).swap(amount0, amount1, to, data);
+        IUniswapV2Pair(pool).swap(amount0, amount1, to, "");
 
     }
 
