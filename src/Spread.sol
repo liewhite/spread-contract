@@ -6,10 +6,12 @@ import "./interfaces/IERC20.sol";
 import "./libraries/UniswapV2Library.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Callee.sol";
+import "../lib/forge-std/src/Test.sol";
 
 contract Spread is
     Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081),
-    IUniswapV2Callee
+    IUniswapV2Callee,
+    Test
 {
     // 临时变量， 验证回调是否合法
     address private tmpPoolAddr;
@@ -40,7 +42,7 @@ contract Spread is
         uint256 amountOut,
         uint256 amountIn,
         bool isToken0Out // 是否借出的token0
-    ) internal {
+    ) public {
         // 回调需要知道归还哪个token, 借0还1， 借1还0
         address repayToken;
         if (isToken0Out) {
@@ -48,7 +50,7 @@ contract Spread is
         } else {
             repayToken = IUniswapV2Pair(pool).token0();
         }
-        // 回调也需要归还多少
+        // 回调需要知道归还多少
         uint256 callbackAmountIn = amountIn;
         // 合约内计算amountIn
         if (callbackAmountIn == 0) {
@@ -85,7 +87,8 @@ contract Spread is
         );
     }
 
-    function uniswapV2Call(address, uint, uint, bytes calldata data) external {
+    function uniswapV2Call(address, uint, uint, bytes calldata data) external override {
+        require(msg.sender == tmpPoolAddr);
         (address token, uint256 amount) = abi.decode(data, (address, uint256));
         IERC20(token).transfer(msg.sender, amount);
     }
