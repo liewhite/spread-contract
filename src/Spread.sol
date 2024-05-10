@@ -6,13 +6,22 @@ import "./interfaces/IERC20.sol";
 import "./libraries/UniswapV2Library.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Callee.sol";
+import "./interfaces/IUniswapV3SwapCallback.sol";
 import "../lib/forge-std/src/Test.sol";
 
 contract Spread is
     Ownable(0x7Ca9659FeAd658B7f0409803E0D678d75C49C081),
     IUniswapV2Callee,
+    IUniswapV3SwapCallback,
     Test
 {
+    struct SwapItem {
+        uint8 protocol;
+        address pool;
+        uint256 amountIn;
+        uint256 amountOut;
+        bool isToken0Out;
+    }
     // 临时变量， 验证回调是否合法
     address private tmpPoolAddr;
 
@@ -24,25 +33,118 @@ contract Spread is
         payable(msg.sender).transfer(amount);
     }
 
-    // 搬砖函数
-    // 接收step[], 每一步表示次swap, 第一步总是闪电贷
-    function moveSpread() public onlyOwner {}
-    /*
-     闪电贷和swap逻辑不同， 闪电贷是策略先指定amountOut，拿到token, 最后再还钱
-     多还的钱是肯定不退的， 所以， 必须自己计算还钱的数量
-     */
+    function parsePathItem(
+        bytes memory data
+    ) internal pure returns (SwapItem memory) {
+        // protocol 0 univ2 1 univ3
+        // protocol, pool, next_pool, amountBorrow, amountRepay, isToken0Out
+        (
+            uint8 protocol, // protocol
+            address pool,
+            uint256 amountIn,
+            uint256 amountOut,
+            bool isToken0Out
+        ) = abi.decode(data, (uint8, address, uint256, uint256, bool));
+        return SwapItem(protocol, pool, amountIn, amountOut, isToken0Out);
+    }
 
-    // univ2闪电贷逻辑, 直接把钱借到下一个池子去
-    // amountOut来自策略二分查找的结果， amountIn模拟时合约自己计算， 广播时由策略根据模拟log指定
-    // 模拟时amountIn=0， 通过getAmountIn计算
-    // 模拟完成后， 可以通过log拿到getAmountIn， 正式发送交易时就不再需要指定getAmountIn了
+    // 执行swap步骤， flash的callback都转发到这里
+    function swapsAndRepay(bytes memory data) internal {
+        (
+            address repayPool,
+            address repayToken,
+            uint256 repayAmount,
+            bytes[] memory swaps
+        ) = abi.decode(data, (address, address, uint256, bytes[]));
+        uint swapsLen = swaps.length;
+        SwapItem[] memory swapItems = new SwapItem[](swapsLen);
+        // 先全部parse
+        for (uint i = 0; i < swapsLen; i++) {
+            swapItems[i] = parsePathItem(swaps[i]);
+        }
+
+        for (uint i = 0; i < swapsLen; i++) {
+            SwapItem memory item = swapItems[i];
+            address receiver;
+            if (i == swapsLen - 1) {
+                receiver = address(this);
+            } else {
+                receiver = swapItems[i + 1].pool;
+            }
+            if (item.protocol == 0) {
+                swap_univ2(
+                    item.pool,
+                    receiver,
+                    item.amountIn,
+                    item.amountOut,
+                    item.isToken0Out
+                );
+            } else if (item.protocol == 1) {
+                swap_univ3(
+                    item.pool,
+                    receiver,
+                    item.amountIn,
+                    item.amountOut,
+                    item.isToken0Out
+                );
+            } else {
+                revert("unknown protocol");
+            }
+            // repay
+            IERC20(repayToken).transfer(repayPool, repayAmount);
+        }
+    }
+
+    // 搬砖函数
+    // 搬砖分3步
+    // 1. 闪电贷, 由策略发起交易
+    // 2. swaps， 通过callback触发,然后循环swap, 最后一个swap的receiver是本合约(策略应该已经填好了)
+    // 3. repay, callback中swap完后， 调用repay函数
+    function startSpread(
+        address flashPool,
+        uint8 flashProtocol,
+        uint256 flashBorrow,
+        uint256 flashRepay,
+        bool isBorrowToken0,
+        bytes[] calldata swaps 
+    ) public onlyOwner {
+        // 需要
+        SwapItem memory firstSwap = parsePathItem(swaps[0]);
+
+        // 处理闪电贷
+        if (flashProtocol == 0) {
+            loanUniv2(
+                flashPool,
+                firstSwap.pool,
+                flashRepay,
+                flashBorrow,
+                isBorrowToken0,
+                swaps
+            );
+        } else if (flashProtocol == 1) {
+            loanUniv3(
+                flashPool,
+                firstSwap.pool,
+                flashRepay,
+                flashBorrow,
+                isBorrowToken0,
+                swaps
+            );
+        } else {
+            revert("unknown protocol");
+        }
+    }
+
     function loanUniv2(
         address pool,
         address to,
-        uint256 amountOut,
-        uint256 amountIn,
-        bool isToken0Out // 是否借出的token0
+        uint256 amountRepay, // 模拟时为0
+        uint256 amountBorrow,
+        bool isToken0Out, // 是否借出的token0
+        bytes[] memory path
     ) public {
+        // 闪电贷不可能是最后一步
+        require(path.length > 0);
         // 回调需要知道归还哪个token, 借0还1， 借1还0
         address repayToken;
         if (isToken0Out) {
@@ -51,20 +153,20 @@ contract Spread is
             repayToken = IUniswapV2Pair(pool).token0();
         }
         // 回调需要知道归还多少
-        uint256 callbackAmountIn = amountIn;
+        uint256 repayAmount = amountRepay;
         // 合约内计算amountIn
-        if (callbackAmountIn == 0) {
+        if (repayAmount == 0) {
             (uint256 reserve0, uint256 reserve1, ) = IUniswapV2Pair(pool)
                 .getReserves();
             if (isToken0Out) {
-                callbackAmountIn = UniswapV2Library.getAmountIn(
-                    amountOut,
+                repayAmount = UniswapV2Library.getAmountIn(
+                    amountBorrow,
                     reserve1,
                     reserve0
                 );
             } else {
-                callbackAmountIn = UniswapV2Library.getAmountIn(
-                    amountOut,
+                repayAmount = UniswapV2Library.getAmountIn(
+                    amountBorrow,
                     reserve0,
                     reserve1
                 );
@@ -74,23 +176,27 @@ contract Spread is
         uint256 amount0 = 0;
         uint256 amount1 = 0;
         if (isToken0Out) {
-            amount0 = amountOut;
+            amount0 = amountBorrow;
         } else {
-            amount1 = amountOut;
+            amount1 = amountBorrow;
         }
         tmpPoolAddr = pool;
         IUniswapV2Pair(pool).swap(
             amount0,
             amount1,
             to,
-            abi.encode(repayToken, callbackAmountIn)
+            abi.encode(pool, repayToken, repayAmount, path)
         );
     }
 
-    function uniswapV2Call(address, uint, uint, bytes calldata data) external override {
+    function uniswapV2Call(
+        address,
+        uint,
+        uint,
+        bytes calldata data
+    ) external override {
         require(msg.sender == tmpPoolAddr);
-        (address token, uint256 amount) = abi.decode(data, (address, uint256));
-        IERC20(token).transfer(msg.sender, amount);
+        swapsAndRepay(data);
     }
 
     // univ3闪电贷逻辑, 直接把钱借到下一个池子去
@@ -99,15 +205,37 @@ contract Spread is
     function loanUniv3(
         address pool,
         address to,
-        uint256 amount,
-        bool is_token0
+        uint256 amountOut,
+        uint256 amountIn,
+        bool isToken0Out, // 是否借出的token0
+        bytes[] memory conts
     ) internal {}
+
+    function uniswapV3SwapCallback(
+        int256,
+        int256,
+        bytes calldata data
+    ) external {
+        swapsAndRepay(data);
+    }
 
     // univ2 swap 逻辑
     // 这里假设amountIn已经进入池子了
     // NOTE: amountOut是必须知道的, 如果是0 ， 那就通过getAmountOut计算
-    function swap_univ2() internal {}
+    function swap_univ2(
+        address pool,
+        address receiver,
+        uint256 amountIn,
+        uint256 amountOut,
+        bool isToken0Out
+    ) internal {}
 
     // univ2 swap 逻辑, swap一定是知道amountIn的， 那么amountOut就会通过函数返回值拿到
-    function swap_univ3() internal {}
+    function swap_univ3(
+        address pool,
+        address receiver,
+        uint256 amountIn,
+        uint256 amountOut,
+        bool isToken0Out
+    ) internal {}
 }
