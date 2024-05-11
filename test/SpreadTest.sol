@@ -18,6 +18,24 @@ contract SpreadTest is TestSpreadCommon, IUniswapV3SwapCallback {
     address link_usdc_v3 = 0xDD092f5Dce127961AF6ebE975978c084C935Bcc8;
     address weth_usdc_v3 = 0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443;
 
+    function testV2Swap() public {
+        writeTokenBalance(address(spread), address(weth), 100 ether);
+        spread.swap_univ2(
+            0x716fBdA28320849Daa418996CA9403Fe9d1fA564,
+            0.1 ether,
+            false
+        );
+    }
+
+    function testV2Flash() public {
+        writeTokenBalance(address(spread), address(weth), 100 ether);
+        spread.loanUniv2(
+            0x716fBdA28320849Daa418996CA9403Fe9d1fA564,
+            7144482184133193680804,
+            false,
+            new bytes[](0)
+        );
+    }
     // 买逻辑：
     // 首先目标交易 WETH -> LINK,买上去
     // 则我们构造一个从该池借入WETH， 还入LINK的 flash (卖LINK)
@@ -54,12 +72,6 @@ contract SpreadTest is TestSpreadCommon, IUniswapV3SwapCallback {
         emit log_uint(afterx);
     }
 
-    // 模拟套利， 目标是赚取WETH， 分成买卖两种逻辑测试
-    address xai = 0x4Cb9a7AE498CEDcBb5EAe9f25736aE7d428C9D66;
-    address xai_weth_v2 = 0xA43fe16908251ee70EF74718545e4FE6C5cCEc9f;
-    address pepe_usdc_v3 = 0x261D53F3CD0B38DAbBAB252DCc8adEAA8C67bCbA;
-    address weth_usdc_v3 = 0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443;
-
     function uniswapV3SwapCallback(
         int256 amount0,
         int256 amount1,
@@ -85,5 +97,4 @@ contract SpreadTest is TestSpreadCommon, IUniswapV3SwapCallback {
             }
         }
     }
-
 }

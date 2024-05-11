@@ -60,29 +60,36 @@ contract Spread is
             uint256 repayAmount,
             bytes[] memory swaps
         ) = abi.decode(data, (address, address, uint256, uint256, bytes[]));
+
         uint swapsLen = swaps.length;
-        SwapItem[] memory swapItems = new SwapItem[](swapsLen);
-        // 先全部parse
-        for (uint i = 0; i < swapsLen; i++) {
-            swapItems[i] = parsePathItem(swaps[i]);
-        }
-        uint256 amountIn = borrowAmount;
-        for (uint i = 0; i < swapsLen; i++) {
-            SwapItem memory item = swapItems[i];
-            if (item.protocol == 0) {
-                amountIn = swap_univ2(
-                    item.pool,
-                    // address(this),
-                    amountIn,
-                    item.isToken0Out
-                );
-            } else if (item.protocol == 1) {
-                emit log_uint(amountIn);
-                amountIn = swap_univ3(item.pool, amountIn, item.isToken0Out);
-            } else {
-                revert("unknown protocol");
+        if (swapsLen > 0) {
+            SwapItem[] memory swapItems = new SwapItem[](swapsLen);
+
+            // 先全部parse
+            for (uint i = 0; i < swapsLen; i++) {
+                swapItems[i] = parsePathItem(swaps[i]);
+            }
+            uint256 amountIn = borrowAmount;
+            for (uint i = 0; i < swapsLen; i++) {
+                SwapItem memory item = swapItems[i];
+                if (item.protocol == 0) {
+                    amountIn = swap_univ2(
+                        item.pool,
+                        amountIn,
+                        item.isToken0Out
+                    );
+                } else if (item.protocol == 1) {
+                    amountIn = swap_univ3(
+                        item.pool,
+                        amountIn,
+                        item.isToken0Out
+                    );
+                } else {
+                    revert("unknown protocol");
+                }
             }
         }
+
         // repay
         IERC20(repayToken).transfer(repayPool, repayAmount);
     }
@@ -100,9 +107,6 @@ contract Spread is
         bytes[] calldata swaps
     ) public {
         require((swaps.length > 0));
-        // 第一个pool是闪电贷后的第一个池子
-        // SwapItem memory firstSwap = parsePathItem(swaps[0]);
-
         // 处理闪电贷
         if (flashProtocol == 0) {
             loanUniv2(
@@ -142,7 +146,7 @@ contract Spread is
         uint256 repayAmount = 0;
         // 合约内计算amountIn
         if (repayAmount == 0) {
-            (uint256 reserve0, uint256 reserve1, ) = IUniswapV2Pair(pool)
+            (uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(pool)
                 .getReserves();
             if (isToken0Out) {
                 // repay token1
@@ -266,15 +270,13 @@ contract Spread is
     // univ2 swap 逻辑
     function swap_univ2(
         address pool,
-        // address receiver,
         uint256 amountIn, // 上一个池子的amountOut就是这里的amountIn
-        // uint256 amountOut,
         bool isToken0Out
-    ) internal returns (uint256) {
+    ) public returns (uint256) {
         uint256 out = 0;
         // 合约内计算amountIn
         if (out == 0) {
-            (uint256 reserve0, uint256 reserve1, ) = IUniswapV2Pair(pool)
+            (uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(pool)
                 .getReserves();
             if (isToken0Out) {
                 // repay token1
@@ -293,7 +295,6 @@ contract Spread is
             }
         }
         // 转入amountIn
-
         if (isToken0Out) {
             IERC20(IUniswapV2Pair(pool).token1()).transfer(pool, amountIn);
             IUniswapV2Pair(pool).swap(out, 0, address(this), "");
