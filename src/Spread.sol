@@ -10,19 +10,16 @@ import "./interfaces/IUniswapV2Callee.sol";
 import "./interfaces/IUniswapV3SwapCallback.sol";
 import "./interfaces/IUniswapV3PoolActions.sol";
 import "./interfaces/IUniswapV3PoolImmutables.sol";
-import "../lib/forge-std/src/Test.sol";
+// import "../lib/forge-std/src/Test.sol";
 
 contract Spread is
     Ownable(0xfA7DF14Dc79dC8D92dB15508FC4c424933e769E0),
     IUniswapV2Callee,
-    IUniswapV3SwapCallback,
-    Test
+    IUniswapV3SwapCallback
 {
     struct SwapItem {
         uint8 protocol;
         address pool;
-        // uint256 amountIn; // 第一个amountIn来自flash ， 后面的in都是前一个的out
-        // uint256 amountOut;
         bool isToken0Out;
     }
     // 临时变量， 验证回调是否合法
@@ -61,6 +58,8 @@ contract Spread is
             bytes[] memory swaps
         ) = abi.decode(data, (address, address, uint256, uint256, bytes[]));
 
+        // 永远都是借 ETH还ETH(USDC)
+        uint256 beforeBalance = IERC20(repayToken).balanceOf(address(this));
         uint swapsLen = swaps.length;
         if (swapsLen > 0) {
             SwapItem[] memory swapItems = new SwapItem[](swapsLen);
@@ -92,6 +91,8 @@ contract Spread is
 
         // repay
         IERC20(repayToken).transfer(repayPool, repayAmount);
+        uint256 afterBalance = IERC20(repayToken).balanceOf(address(this));
+        require(afterBalance > beforeBalance);
     }
 
     // 搬砖函数
@@ -105,7 +106,7 @@ contract Spread is
         uint256 flashBorrow,
         bool isBorrowToken0,
         bytes[] calldata swaps
-    ) public onlyOwner() {
+    ) public onlyOwner {
         require((swaps.length > 0));
         // 处理闪电贷
         if (flashProtocol == 0) {
@@ -134,7 +135,7 @@ contract Spread is
         uint256 amountBorrow,
         bool isToken0Out, // 是否借出的token0
         bytes[] memory path
-    ) public {
+    ) public onlyOwner {
         // 归还哪个token, 借0还1， 借1还0
         address repayToken;
         if (isToken0Out) {
@@ -272,7 +273,7 @@ contract Spread is
         address pool,
         uint256 amountIn, // 上一个池子的amountOut就是这里的amountIn
         bool isToken0Out
-    ) public returns (uint256) {
+    ) public onlyOwner returns (uint256) {
         uint256 out = 0;
         // 合约内计算amountIn
         if (out == 0) {
