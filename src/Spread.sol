@@ -105,7 +105,7 @@ contract Spread is
         uint256 flashBorrow,
         bool isBorrowToken0,
         bytes[] calldata swaps
-    ) public {
+    ) public onlyOwner() {
         require((swaps.length > 0));
         // 处理闪电贷
         if (flashProtocol == 0) {
